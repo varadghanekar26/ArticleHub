@@ -150,7 +150,7 @@ function App() {
           <div className="empty-state">
             <Library size={44} />
             <h2>Select an article</h2>
-            <p>Published stories and saved drafts will appear here once the API is running.</p>
+            <p>Published stories and saved drafts will appear here.</p>
           </div>
         )}
       </section>
