@@ -291,3 +291,7 @@ def delete_article(article_id: int) -> None:
         cursor = conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Article not found")
+
+@app.get("/")
+def home():
+    return {"message": "ArticleHub API Running"}
