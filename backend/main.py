@@ -64,7 +64,6 @@ class UserPublic(BaseModel):
     id: int
     username: str
     email: str
-    created_at: datetime
 
 
 def connect() -> sqlite3.Connection:
@@ -96,7 +95,6 @@ def serialize_user(row: sqlite3.Row) -> UserPublic:
         id=row["id"],
         username=row["username"],
         email=row["email"],
-        created_at=datetime.fromisoformat(row["created_at"]),
     )
 
 
@@ -161,11 +159,16 @@ def startup() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                hashed_password TEXT NOT NULL
             )
             """
         )
+        user_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_hash" in user_columns and "hashed_password" not in user_columns:
+            conn.execute("ALTER TABLE users RENAME COLUMN password_hash TO hashed_password")
         count = conn.execute("SELECT COUNT(*) AS count FROM articles").fetchone()["count"]
         if count == 0:
             seed_articles(conn)
@@ -244,20 +247,19 @@ def signup(user: UserCreate) -> UserPublic:
     if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
         raise HTTPException(status_code=400, detail="Enter a valid email address")
 
-    now = utc_now()
     with connect() as conn:
         try:
             cursor = conn.execute(
                 """
-                INSERT INTO users (username, email, password_hash, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (username, email, hashed_password)
+                VALUES (?, ?, ?)
                 """,
-                (username, email, hash_password(user.password), now),
+                (username, email, hash_password(user.password)),
             )
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="Username or email already exists")
 
-        row = conn.execute("SELECT id, username, email, created_at FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        row = conn.execute("SELECT id, username, email FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return serialize_user(row)
 
 
