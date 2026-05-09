@@ -1,12 +1,31 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BookOpen, Check, Clock, FilePenLine, Library, Plus, Search, Send, Sparkles } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  Clock,
+  FilePenLine,
+  Library,
+  Lock,
+  LogOut,
+  Mail,
+  Plus,
+  Search,
+  Send,
+  Sparkles,
+  User,
+} from "lucide-react";
 import "./styles.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const emptyDraft = { title: "", author: "", summary: "", content: "", tags: "", status: "draft" };
+const emptyAuth = { username: "", email: "", password: "" };
 
 function App() {
+  const [token, setToken] = useState(() => localStorage.getItem("articlehub_token") || "");
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState(emptyAuth);
+  const [authMessage, setAuthMessage] = useState("");
   const [articles, setArticles] = useState([]);
   const [activeSlug, setActiveSlug] = useState("");
   const [activeArticle, setActiveArticle] = useState(null);
@@ -17,8 +36,9 @@ function App() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
+    if (!token) return;
     loadArticles(status, query);
-  }, [query, status]);
+  }, [query, status, token]);
 
   useEffect(() => {
     if (!activeSlug && articles.length > 0) {
@@ -63,6 +83,69 @@ function App() {
     setDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function updateAuth(field, value) {
+    setAuthForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submitAuth(event) {
+    event.preventDefault();
+    setAuthMessage("");
+    const endpoint = authMode === "signup" ? "signup" : "login";
+    const payload =
+      authMode === "signup"
+        ? {
+            username: authForm.username.trim(),
+            email: authForm.email.trim(),
+            password: authForm.password,
+          }
+        : {
+            email: authForm.email.trim(),
+            password: authForm.password,
+          };
+
+    let response;
+    try {
+      response = await fetch(`${API_URL}/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      setAuthMessage("API unavailable. Start the FastAPI server and try again.");
+      return;
+    }
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      if (response.status === 404) {
+        setAuthMessage(`Route not found: ${API_URL}/${endpoint}. Restart the FastAPI server and confirm it is running backend/main.py.`);
+        return;
+      }
+      setAuthMessage(error?.detail || "Authentication failed.");
+      return;
+    }
+
+    if (authMode === "signup") {
+      setAuthMode("login");
+      setAuthForm((current) => ({ ...emptyAuth, email: current.email }));
+      setAuthMessage("Account created. Log in to continue.");
+      return;
+    }
+
+    const data = await response.json();
+    localStorage.setItem("articlehub_token", data.access_token);
+    setToken(data.access_token);
+    setAuthForm(emptyAuth);
+  }
+
+  function logout() {
+    localStorage.removeItem("articlehub_token");
+    setToken("");
+    setActiveSlug("");
+    setActiveArticle(null);
+    setArticles([]);
+  }
+
   async function submitArticle(event) {
     event.preventDefault();
     setMessage("");
@@ -93,6 +176,62 @@ function App() {
     loadArticles("all", query);
   }
 
+  if (!token) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel">
+          <div className="brand auth-brand">
+            <div className="brand-mark"><BookOpen size={24} /></div>
+            <div>
+              <h1>ArticleHub</h1>
+              <p>Write, publish, explore</p>
+            </div>
+          </div>
+
+          <div className="auth-tabs">
+            <button type="button" className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}>Login</button>
+            <button type="button" className={authMode === "signup" ? "active" : ""} onClick={() => setAuthMode("signup")}>Signup</button>
+          </div>
+
+          <form className="auth-form" onSubmit={submitAuth}>
+            <div>
+              <span className="eyebrow"><Lock size={16} />{authMode === "signup" ? "Create account" : "Welcome back"}</span>
+              <h2>{authMode === "signup" ? "Signup" : "Login"}</h2>
+            </div>
+            {authMode === "signup" && (
+              <label>
+                Username
+                <div className="input-with-icon">
+                  <User size={18} />
+                  <input value={authForm.username} onChange={(event) => updateAuth("username", event.target.value)} required minLength={3} maxLength={40} />
+                </div>
+              </label>
+            )}
+            <label>
+              Email
+              <div className="input-with-icon">
+                <Mail size={18} />
+                <input type="email" value={authForm.email} onChange={(event) => updateAuth("email", event.target.value)} required />
+              </div>
+            </label>
+            <label>
+              Password
+              <div className="input-with-icon">
+                <Lock size={18} />
+                <input type="password" value={authForm.password} onChange={(event) => updateAuth("password", event.target.value)} required minLength={8} />
+              </div>
+            </label>
+            <button className="primary-action" type="submit">
+              <Send size={18} />
+              {authMode === "signup" ? "Create account" : "Login"}
+            </button>
+            {authMessage && <p className="form-message">{authMessage}</p>}
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -103,6 +242,10 @@ function App() {
             <p>Write, publish, explore</p>
           </div>
         </div>
+        <button className="logout-button" onClick={logout} type="button">
+          <LogOut size={17} />
+          Logout
+        </button>
         <div className="search-box">
           <Search size={18} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search articles" />
