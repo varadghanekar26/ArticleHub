@@ -3,6 +3,7 @@ from pathlib import Path
 import sqlite3
 from typing import Literal
 
+import bcrypt
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -53,6 +54,19 @@ class Article(ArticleBase):
     published_at: datetime | None = None
 
 
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    email: str = Field(min_length=5, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserPublic(BaseModel):
+    id: int
+    username: str
+    email: str
+    created_at: datetime
+
+
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -70,6 +84,20 @@ def slugify(value: str) -> str:
 
 def estimate_read_minutes(content: str) -> int:
     return max(1, round(len(content.split()) / 220))
+
+
+def hash_password(password: str) -> str:
+    password_bytes = password.encode("utf-8")
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
+
+
+def serialize_user(row: sqlite3.Row) -> UserPublic:
+    return UserPublic(
+        id=row["id"],
+        username=row["username"],
+        email=row["email"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
 
 
 def serialize(row: sqlite3.Row) -> Article:
@@ -124,6 +152,17 @@ def startup() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 published_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
             """
         )
@@ -194,6 +233,32 @@ def create_article(conn: sqlite3.Connection, article: ArticleCreate) -> Article:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/signup", response_model=UserPublic, status_code=201)
+def signup(user: UserCreate) -> UserPublic:
+    username = user.username.strip()
+    email = user.email.strip().lower()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+    now = utc_now()
+    with connect() as conn:
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO users (username, email, password_hash, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (username, email, hash_password(user.password), now),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="Username or email already exists")
+
+        row = conn.execute("SELECT id, username, email, created_at FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return serialize_user(row)
 
 
 @app.get("/articles", response_model=list[Article])
