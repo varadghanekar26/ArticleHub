@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import sqlite3
 from typing import Literal
@@ -6,11 +7,15 @@ from typing import Literal
 import bcrypt
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+import jwt
 from pydantic import BaseModel, Field
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "articlehub.db"
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "articlehub-dev-secret-change-me")
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 app = FastAPI(title="ArticleHub API", version="1.0.0")
 
@@ -60,10 +65,20 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class UserLogin(BaseModel):
+    email: str = Field(min_length=5, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+
+
 class UserPublic(BaseModel):
     id: int
     username: str
     email: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 def connect() -> sqlite3.Connection:
@@ -88,6 +103,16 @@ def estimate_read_minutes(content: str) -> int:
 def hash_password(password: str) -> str:
     password_bytes = password.encode("utf-8")
     return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+
+
+def create_access_token(user_id: int) -> str:
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {"user_id": user_id, "exp": expires_at}
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
 def serialize_user(row: sqlite3.Row) -> UserPublic:
@@ -261,6 +286,21 @@ def signup(user: UserCreate) -> UserPublic:
 
         row = conn.execute("SELECT id, username, email FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return serialize_user(row)
+
+
+@app.post("/login", response_model=TokenResponse)
+def login(credentials: UserLogin) -> TokenResponse:
+    email = credentials.email.strip().lower()
+    with connect() as conn:
+        user = conn.execute(
+            "SELECT id, hashed_password FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+
+    if user is None or not verify_password(credentials.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    return TokenResponse(access_token=create_access_token(user["id"]))
 
 
 @app.get("/articles", response_model=list[Article])
